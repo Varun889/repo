@@ -1,93 +1,78 @@
 import streamlit as st
-import pandas as pd
 import requests
 import time
-import plotly.express as px
+import pandas as pd
 
-# App configuration
+# Setup - must be first
 st.set_page_config(layout="wide")
-st.title("📊 NSE Options OI Live Pro")
+st.title("🔢 Live NSE Options OI Numbers")
 
-# Session state for persistent data
-if 'data' not in st.session_state:
-    st.session_state.data = None
+# Session state to persist data
+if 'oi_data' not in st.session_state:
+    st.session_state.oi_data = {"Calls": 0, "Puts": 0, "PCR": 0}
 
-# Improved data fetcher with proper error handling
-def get_nse_data(symbol):
+# Improved NSE data fetcher
+def fetch_live_data(symbol="NIFTY"):
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Accept-Encoding": "gzip, deflate",
-        "Accept": "*/*"
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "en-US,en;q=0.9"
     }
     
     try:
-        # First get cookies
         session = requests.Session()
         session.get("https://www.nseindia.com", headers=headers, timeout=5)
+        data = session.get(url, headers=headers, timeout=10).json()
         
-        # Then get data
-        response = session.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        return response.json()["records"]["data"]
-    except Exception as e:
-        st.warning(f"Data refresh in progress... (Error: {str(e)[:50]})")
-        time.sleep(3)
+        calls = sum(item["CE"]["openInterest"] for item in data["records"]["data"] if "CE" in item)
+        puts = sum(item["PE"]["openInterest"] for item in data["records"]["data"] if "PE" in item)
+        return calls, puts, round(puts/max(1, calls), 2)
+    except:
         return None
 
-# Process data with safety checks
-def process_data(raw_data):
-    if not raw_data:
-        return None, None
-    
-    oi_data = []
-    for d in raw_data:
-        if isinstance(d, dict) and "CE" in d and "PE" in d:
-            oi_data.append({
-                "Strike": d["strikePrice"],
-                "Calls": d["CE"]["openInterest"],
-                "Puts": d["PE"]["openInterest"]
-            })
-    
-    if not oi_data:
-        return None, None
-        
-    df = pd.DataFrame(oi_data)
-    pcr = round(df["Puts"].sum() / max(1, df["Calls"].sum()), 2)
-    return df, pcr
+# UI Controls
+col1, col2 = st.columns(2)
+with col1:
+    symbol = st.selectbox("Index", ["NIFTY", "BANKNIFTY"])
+with col2:
+    refresh_time = st.selectbox("Refresh (seconds)", [1, 2, 5], index=1)
 
-# UI Elements
-symbol = st.selectbox("Select Index", ["NIFTY", "BANKNIFTY"])
-refresh_rate = st.slider("Update Speed (seconds)", 1, 10, 3)
+# Display containers
+call_placeholder = st.empty()
+put_placeholder = st.empty()
+pcr_placeholder = st.empty()
 
-# Main app logic
-placeholder = st.empty()
-
+# Main update loop
 while True:
-    with placeholder.container():
-        # Get fresh data
-        raw_data = get_nse_data(symbol)
-        df, pcr = process_data(raw_data)
-        
-        if df is not None:
-            # Metrics row
-            col1, col2, col3 = st.columns(3)
-            col1.metric("📈 Calls OI", f"{df['Calls'].sum()/100000:.1f} L")
-            col2.metric("📉 Puts OI", f"{df['Puts'].sum()/100000:.1f} L")
-            col3.metric("🧮 Put/Call Ratio", pcr)
-            
-            # Visual bar chart
-            st.subheader("Call vs Put Open Interest")
-            fig = px.bar(
-                df.melt(id_vars="Strike"), 
-                x="Strike", 
-                y="value", 
-                color="variable",
-                barmode="group",
-                color_discrete_map={"Calls": "red", "Puts": "green"}
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("Waiting for market data...")
+    data = fetch_live_data(symbol)
+    if data:
+        calls, puts, pcr = data
+        st.session_state.oi_data = {
+            "Calls": calls,
+            "Puts": puts,
+            "PCR": pcr
+        }
     
-    time.sleep(refresh_rate)
+    # Update displays without redrawing everything
+    with call_placeholder.container():
+        st.metric(
+            label="📈 Calls OI", 
+            value=f"{st.session_state.oi_data['Calls']/100000:.1f} L", 
+            delta_color="off"
+        )
+    
+    with put_placeholder.container():
+        st.metric(
+            label="📉 Puts OI", 
+            value=f"{st.session_state.oi_data['Puts']/100000:.1f} L", 
+            delta_color="off"
+        )
+    
+    with pcr_placeholder.container():
+        st.metric(
+            label="🧮 Put/Call Ratio", 
+            value=st.session_state.oi_data['PCR'], 
+            delta_color="off"
+        )
+    
+    time.sleep(refresh_time)
