@@ -3,40 +3,34 @@ import pandas as pd
 import requests
 import time
 import random
-from bs4 import BeautifulSoup
-import plotly.express as px
 
-# Configure
+# Configure app
 st.set_page_config(layout="wide")
 st.title("🚀 NSE Options OI Live Pro")
 
-# User Inputs
+# User inputs
 symbol = st.selectbox("Select Index", ["NIFTY", "BANKNIFTY"])
-expiry = st.selectbox("Expiry", ["Current Week", "Next Week"])
+refresh_rate = st.slider("Update Speed (ms)", 1000, 5000, 2000)
 
-# Smart NSE Scraper (Avoids Blocks)
+# Simplified data fetcher (no BeautifulSoup needed)
 def get_nse_data():
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
         "Accept-Language": "en-US,en;q=0.9",
     }
     
     try:
-        # Rotate user agents & add delays
-        time.sleep(random.uniform(0.5, 1.5))
-        
         session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers)  # Get cookies
-        data = session.get(url, headers=headers).json()
-        
-        return data["records"]["data"]
+        session.get("https://www.nseindia.com", headers=headers, timeout=5)
+        response = session.get(url, headers=headers, timeout=5)
+        return response.json()["records"]["data"]
     except Exception as e:
-        st.error(f"⚠️ NSE Blocked Request. Retrying... {e}")
+        st.warning(f"Fetching fresh data... (Retry in 5s) | Error: {str(e)[:50]}")
         time.sleep(5)
-        return get_nse_data()  # Retry
+        return get_nse_data()
 
-# Process Data
+# Process data
 def process_data(raw_data):
     oi_data = []
     for d in raw_data:
@@ -47,32 +41,29 @@ def process_data(raw_data):
                 "PE_OI": d["PE"]["openInterest"]
             })
     df = pd.DataFrame(oi_data)
-    pcr = round(df["PE_OI"].sum() / df["CE_OI"].sum(), 2)
+    pcr = round(df["PE_OI"].sum() / max(1, df["CE_OI"].sum()), 2)
     return df, pcr
 
-# Auto-Refresh UI
-refresh_rate = st.slider("Update Speed (ms)", 500, 5000, 1000)
+# Main app
 placeholder = st.empty()
 
 while True:
     with placeholder.container():
-        raw_data = get_nse_data()
-        if raw_data:
-            df, pcr = process_data(raw_data)
-            
-            # Live Metrics
-            col1, col2, col3 = st.columns(3)
-            col1.metric("📈 Calls OI", f"{df['CE_OI'].sum()/100000:.1f} L")
-            col2.metric("📉 Puts OI", f"{df['PE_OI'].sum()/100000:.1f} L")
-            col3.metric("🧮 PCR", pcr, delta=f"{pcr-1:.2f}")
-            
-            # Interactive Chart
-            fig = px.bar(
-                df, 
-                x="Strike", 
-                y=["CE_OI", "PE_OI"],
-                title=f"{symbol} OI Distribution | PCR: {pcr}"
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        try:
+            raw_data = get_nse_data()
+            if raw_data:
+                df, pcr = process_data(raw_data)
+                
+                # Display metrics
+                col1, col2, col3 = st.columns(3)
+                col1.metric("📈 Calls OI", f"{df['CE_OI'].sum()/100000:.1f} L")
+                col2.metric("📉 Puts OI", f"{df['PE_OI'].sum()/100000:.1f} L")
+                col3.metric("🧮 PCR", pcr)
+                
+                # Display chart
+                st.bar_chart(df.set_index("Strike")[["CE_OI", "PE_OI"]])
+                
+        except Exception as e:
+            st.error(f"Temporary error: {str(e)[:100]}")
     
-    time.sleep(refresh_rate/1000)  # Convert ms to seconds
+    time.sleep(refresh_rate/1000)
