@@ -1,28 +1,33 @@
 import streamlit as st
 import requests
 import time
-import pandas as pd
+import json
 
 # Setup - must be first
 st.set_page_config(layout="wide")
-st.title("🔢 Live NSE Options OI Numbers")
+st.title("🔢 Live NSE Options OI")
 
-# Session state to persist data
-if 'oi_data' not in st.session_state:
-    st.session_state.oi_data = {"Calls": 0, "Puts": 0, "PCR": 0}
+# Initialize session state
+if 'data' not in st.session_state:
+    st.session_state.data = {
+        "Calls": 0,
+        "Puts": 0,
+        "PCR": 0.0
+    }
 
-# Improved NSE data fetcher
-def fetch_live_data(symbol="NIFTY"):
+# Silent data fetcher
+def get_oi_data(symbol="NIFTY"):
     url = f"https://www.nseindia.com/api/option-chain-indices?symbol={symbol}"
     headers = {
         "User-Agent": "Mozilla/5.0",
-        "Accept-Language": "en-US,en;q=0.9"
+        "Accept-Encoding": "gzip, deflate"
     }
     
     try:
         session = requests.Session()
-        session.get("https://www.nseindia.com", headers=headers, timeout=5)
-        data = session.get(url, headers=headers, timeout=10).json()
+        session.get("https://www.nseindia.com", headers=headers, timeout=3)
+        response = session.get(url, headers=headers, timeout=5)
+        data = json.loads(response.text)
         
         calls = sum(item["CE"]["openInterest"] for item in data["records"]["data"] if "CE" in item)
         puts = sum(item["PE"]["openInterest"] for item in data["records"]["data"] if "PE" in item)
@@ -33,46 +38,44 @@ def fetch_live_data(symbol="NIFTY"):
 # UI Controls
 col1, col2 = st.columns(2)
 with col1:
-    symbol = st.selectbox("Index", ["NIFTY", "BANKNIFTY"])
+    symbol = st.selectbox("Select Index", ["NIFTY", "BANKNIFTY"])
 with col2:
-    refresh_time = st.selectbox("Refresh (seconds)", [1, 2, 5], index=1)
+    refresh_rate = st.select_slider("Refresh (seconds)", options=[1, 2, 3, 5, 10], value=2)
 
-# Display containers
-call_placeholder = st.empty()
-put_placeholder = st.empty()
-pcr_placeholder = st.empty()
+# Create placeholders
+call_ph = st.empty()
+put_ph = st.empty()
+pcr_ph = st.empty()
 
 # Main update loop
 while True:
-    data = fetch_live_data(symbol)
-    if data:
-        calls, puts, pcr = data
-        st.session_state.oi_data = {
-            "Calls": calls,
-            "Puts": puts,
-            "PCR": pcr
-        }
+    new_data = get_oi_data(symbol)
+    if new_data:
+        st.session_state.data["Calls"], st.session_state.data["Puts"], st.session_state.data["PCR"] = new_data
     
-    # Update displays without redrawing everything
-    with call_placeholder.container():
+    # Update displays silently
+    with call_ph:
         st.metric(
-            label="📈 Calls OI", 
-            value=f"{st.session_state.oi_data['Calls']/100000:.1f} L", 
-            delta_color="off"
+            "📈 Calls OI", 
+            f"{st.session_state.data['Calls']/100000:.1f} L",
+            delta=None,
+            label_visibility="visible"
         )
     
-    with put_placeholder.container():
+    with put_ph:
         st.metric(
-            label="📉 Puts OI", 
-            value=f"{st.session_state.oi_data['Puts']/100000:.1f} L", 
-            delta_color="off"
+            "📉 Puts OI", 
+            f"{st.session_state.data['Puts']/100000:.1f} L",
+            delta=None,
+            label_visibility="visible"
         )
     
-    with pcr_placeholder.container():
+    with pcr_ph:
         st.metric(
-            label="🧮 Put/Call Ratio", 
-            value=st.session_state.oi_data['PCR'], 
-            delta_color="off"
+            "🧮 PCR", 
+            st.session_state.data['PCR'],
+            delta=None,
+            label_visibility="visible"
         )
     
-    time.sleep(refresh_time)
+    time.sleep(refresh_rate)
